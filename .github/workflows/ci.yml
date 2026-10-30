@@ -19,19 +19,24 @@ jobs:
       # ubuntu runner 预装 Android SDK（ANDROID_HOME 已设、license 已接受），
       # 只补装本项目需要的组件（不用 setup-android action——它强制安装已被
       # 仓库下架的旧 tools 包，exit 1）
-      - name: 安装 SDK 组件（cmake / android-37 / NDK r30）
+      - name: 安装 SDK 组件（官方直链，零 sdkmanager 依赖）
         run: |
-          set -x
-          SDKM=$(ls $ANDROID_HOME/cmdline-tools/*/bin/sdkmanager | head -1)
-          yes | "$SDKM" --licenses > /dev/null || true
-          yes | "$SDKM" "cmake;3.31.6" "platforms;android-37" > /dev/null
-          # NDK r30 不在 stable 仓库（lsplant C++23 modules 需要，NDK 27 clang 不支持）
-          # ——直接官方直链下载解压，目录名对齐 AGP ndkVersion 钉的 revision
-          curl -sfLo /tmp/ndk.zip https://dl.google.com/android/repository/android-ndk-r30-linux.zip
-          mkdir -p $ANDROID_HOME/ndk-tmp
-          unzip -q /tmp/ndk.zip -d $ANDROID_HOME/ndk-tmp
-          mv $ANDROID_HOME/ndk-tmp/android-ndk-r30 $ANDROID_HOME/ndk/30.0.16248370
-          rmdir $ANDROID_HOME/ndk-tmp
+          set -e
+          # platforms;android-37（zip 顶层 android-37.0，目录名对齐 AGP compileSdk）
+          curl -sfLo /tmp/p.zip https://dl.google.com/android/repository/platform-37.0_r02.zip
+          unzip -q /tmp/p.zip -d /tmp/p
+          mkdir -p $ANDROID_HOME/platforms
+          mv /tmp/p/android-37.0 $ANDROID_HOME/platforms/android-37
+          # cmake 3.31.6（zip 无顶层目录，直接解到目标）
+          curl -sfLo /tmp/c.zip https://dl.google.com/android/repository/cmake-3.31.6-linux.zip
+          mkdir -p $ANDROID_HOME/cmake/3.31.6
+          unzip -q /tmp/c.zip -d $ANDROID_HOME/cmake/3.31.6
+          # NDK r30（stable 仓库无此包——lsplant C++23 modules 需要，NDK 27 clang 不支持）
+          curl -sfLo /tmp/n.zip https://dl.google.com/android/repository/android-ndk-r30-linux.zip
+          mkdir -p /tmp/n $ANDROID_HOME/ndk
+          unzip -q /tmp/n.zip -d /tmp/n
+          mv /tmp/n/android-ndk-r30 $ANDROID_HOME/ndk/30.0.16248370
+          rm -rf /tmp/p.zip /tmp/c.zip /tmp/n.zip /tmp/p /tmp/n
 
       - name: 构建
         run: ./gradlew build --no-daemon
