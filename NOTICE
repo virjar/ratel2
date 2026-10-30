@@ -1,0 +1,75 @@
+ratel 2.0
+Copyright 2026 virjar
+
+This product includes software developed by the open source community.
+
+===============================================================================
+The following components are bundled in binary form within this project:
+===============================================================================
+
+LSPlant (LGPL-3.0)
+  Source: https://github.com/LSPosed/LSPlant
+  Commit: 6ac2280
+  Location: runtime/src/main/cpp/lsplant/
+  Modifications: import std expanded to traditional includes (NDK C++23
+  modules workaround), find_package(cxx) made optional. See AGENTS.md for
+  the full patch list.
+  License: runtime/src/main/cpp/lsplant/LICENSE
+
+DexBuilder (LGPL-3.0)
+  Source: LSPlant submodule, https://github.com/LSPosed/DexBuilder
+  Commit: ac7fb22
+  Location: runtime/src/main/cpp/lsplant/external/dex_builder/
+  License: runtime/src/main/cpp/lsplant/external/dex_builder/LICENSE
+
+parallel_hashmap (Apache-2.0)
+  Source: https://github.com/greg7mdp/parallel-hashmap
+  Commit: 0cd57d2 (via DexBuilder submodule)
+  Location: runtime/src/main/cpp/lsplant/external/dex_builder/external/parallel_hashmap/
+  License: runtime/src/main/cpp/lsplant/external/dex_builder/external/parallel_hashmap/LICENSE
+
+Dobby (Apache-2.0)
+  Source: https://github.com/LSPosed/Dobby
+  Commit: c1da031
+  Location: runtime/src/main/cpp/dobby/
+  Modifications: /proc/self/mem pread for ELF header reading (SIGBUS race
+  condition fix). See AGENTS.md for details.
+  License: runtime/src/main/cpp/dobby/LICENSE
+
+HiddenApiBypass (Apache-2.0)
+  Source: https://github.com/LSPosed/AndroidHiddenApiBypass
+  Version: 6.2
+  Location: loader/libs/hiddenapibypass.jar (binary)
+  License: https://www.apache.org/licenses/LICENSE-2.0
+
+===============================================================================
+The following libraries are used as build-time dependencies (not bundled):
+===============================================================================
+
+dexlib2/baksmali (Apache-2.0) - https://github.com/google/smali
+jadx (Apache-2.0) - https://github.com/skylot/jadx
+apksig (Apache-2.0) - https://developer.android.com/tools/releases
+r8/D8 (Apache-2.0) - https://r8.googlesource.com/r8
+ASM (Apache-2.0) - https://asm.ow2.io
+commons-compress (Apache-2.0) - https://commons.apache.org/proper/commons-compress/
+apk-parser (Apache-2.0) - https://github.com/hsiafan/apk-parser
+picocli (Apache-2.0) - https://picocli.info
+snakeyaml (Apache-2.0) - https://bitbucket.org/snakeyaml/snakeyaml
+
+===============================================================================
+Additional components
+===============================================================================
+
+pxb-axml manifest editor (Apache-2.0)
+  Source: ratel 1.x org.jf.pxb (https://github.com/virjarRatel/ratel-core)
+  Location: toolchain/src/main/java/org/jf/pxb/
+  Note: ratel 1.x 直系传承；附带修复 1.x 两个隐藏 bug（见 AGENTS.md）。
+
+xz-embedded (0BSD)
+  Source: https://github.com/tukaani-project/xz-embedded
+  Location: runtime/src/main/cpp/xz/
+  Note: XZ_SINGLE mode（无内部内存分配，规避 Android scudo 分配器冲突）。
+
+Maven dependencies (com.android.tools.smali, R8/D8, ASM, jadx, guava,
+picocli, snakeyaml, commons-compress, apksig, hiddenapibypass 等) 按各自
+坐标与许可证消费，未做修改。

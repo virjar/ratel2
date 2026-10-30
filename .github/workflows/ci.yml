@@ -1,0 +1,32 @@
+name: ci
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: android-actions/setup-android@v3
+
+      - name: 安装 SDK 组件（NDK 30 / cmake / android-37）
+        run: sdkmanager "ndk;30.0.16248370" "cmake;3.31.6" "platforms;android-37" > /dev/null
+
+      - name: 构建
+        run: ./gradlew build --no-daemon
+
+      - name: 工具链 dist 自检（init → 模块编译链资源齐备）
+        run: |
+          ./gradlew :toolchain:installDist --no-daemon
+          jar tf toolchain/build/install/ratel/lib/toolchain-*.jar | grep -q "ratel/runtime.dex"
+          jar tf toolchain/build/install/ratel/lib/toolchain-*.jar | grep -q "ratel/sdk/ratel-sdk.jar"
+          jar tf toolchain/build/install/ratel/lib/toolchain-*.jar | grep -q "ratel/wrapper/gradlew"

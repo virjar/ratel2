@@ -1,0 +1,343 @@
+module;
+#include <algorithm>
+#include <array>
+#include <atomic>
+#include <bit>
+#include <cstddef>
+#include <cstdint>
+#include <cstdlib>
+#include <cstring>
+#include <functional>
+#include <list>
+#include <map>
+#include <memory>
+#include <mutex>
+#include <numeric>
+#include <optional>
+#include <set>
+#include <shared_mutex>
+#include <span>
+#include <string>
+#include <string_view>
+#include <tuple>
+#include <unordered_map>
+#include <utility>
+#include <variant>
+#include <vector>
+
+#include <sys/types.h>
+
+#include "logging.hpp"
+
+export module lsplant:class_linker;
+
+// ratel patch: import std; 展开为传统 include（见 AGENTS 补丁清单）
+
+import :art_method;
+import :thread;
+import :common;
+import :clazz;
+import :handle;
+import :runtime;
+import hook_helper;
+
+namespace lsplant::art {
+export class ClassLinker {
+private:
+    inline static auto SetEntryPointsToInterpreter_ =
+        "_ZNK3art11ClassLinker27SetEntryPointsToInterpreterEPNS_9ArtMethodE"_sym.as<void(ClassLinker::*)(ArtMethod *)>;
+
+    inline static auto ShouldUseInterpreterEntrypoint_ =
+        "_ZN3art11ClassLinker30ShouldUseInterpreterEntrypointEPNS_9ArtMethodEPKv"_sym.hook->*[]
+        <Backup auto backup>
+        (ArtMethod *art_method, const void *quick_code)static -> bool {
+            if (quick_code != nullptr && IsHooked(art_method)) [[unlikely]] {
+                return false;
+            }
+            return backup(art_method, quick_code);
+        };
+
+    inline static auto art_quick_to_interpreter_bridge_ =
+            "art_quick_to_interpreter_bridge"_sym.as<void(void *)>;
+
+    inline static auto GetOptimizedCodeFor_ =
+        "_ZN3art15instrumentation15Instrumentation19GetOptimizedCodeForEPNS_9ArtMethodE"_sym
+            .as<void *(ArtMethod *)>;
+
+    inline static auto GetOptimizedCodeForL_ =
+        "_ZN3art15instrumentationL19GetOptimizedCodeForEPNS_9ArtMethodE"_sym
+            .as<void *(ArtMethod *)>;
+
+    inline static art::ArtMethod *MayGetBackup(art::ArtMethod *method) {
+        if (auto backup = IsHooked(method); backup) [[unlikely]] {
+            method = backup;
+            LOGV("propagate native method: %s", method->PrettyMethod(true).data());
+        }
+        return method;
+    }
+
+    inline static auto RegisterNativeThread_ =
+        "_ZN3art6mirror9ArtMethod14RegisterNativeEPNS_6ThreadEPKvb"_sym.hook->*[]
+        <MemBackup auto backup>
+        (ArtMethod *method, Thread *thread, const void *native_method,
+         bool is_fast) static -> void {
+            return backup(MayGetBackup(method), thread, native_method, is_fast);
+        };
+
+    inline static auto UnregisterNativeThread_ =
+        "_ZN3art6mirror9ArtMethod16UnregisterNativeEPNS_6ThreadE"_sym.hook->*[]
+        <MemBackup auto backup>
+        (ArtMethod *method, Thread *thread) static -> void {
+            return backup(MayGetBackup(method), thread);
+        };
+
+    inline static auto RegisterNativeFast_ =
+        "_ZN3art9ArtMethod14RegisterNativeEPKvb"_sym.hook->*[]
+        <MemBackup auto backup>
+        (ArtMethod *method, const void *native_method, bool is_fast) static -> void {
+            return backup(MayGetBackup(method), native_method, is_fast);
+        };
+
+    inline static auto RegisterNativeFastWithReturn_ =
+        "_ZN3art9ArtMethod14RegisterNativeEPKvb"_sym.hook->*[]
+        <MemBackup auto backup>
+        (ArtMethod *method, const void *native_method,
+         bool is_fast) static -> const void * {
+            return backup(MayGetBackup(method), native_method, is_fast);
+        };
+
+    inline static auto RegisterNative_ =
+        "_ZN3art9ArtMethod14RegisterNativeEPKv"_sym.hook->*[]
+        <MemBackup auto backup>
+        (ArtMethod *method, const void *native_method) static -> const void * {
+            return backup(MayGetBackup(method), native_method);
+        };
+
+    inline static auto UnregisterNative_ =
+        "_ZN3art9ArtMethod16UnregisterNativeEv"_sym.hook->*[]
+        <MemBackup auto backup>
+        (ArtMethod *method) static -> void {
+            return backup(MayGetBackup(method));
+        };
+
+    inline static auto RegisterNativeClassLinker_ =
+        "_ZN3art11ClassLinker14RegisterNativeEPNS_6ThreadEPNS_9ArtMethodEPKv"_sym.hook->*[]
+        <MemBackup auto backup>
+        (ClassLinker *thiz, Thread *self, ArtMethod *method, const void *native_method) static -> const void *{
+            return backup(thiz, self, MayGetBackup(method), native_method);
+        };
+
+    inline static auto UnregisterNativeClassLinker_ =
+        "_ZN3art11ClassLinker16UnregisterNativeEPNS_6ThreadEPNS_9ArtMethodE"_sym.hook->*[]
+        <MemBackup auto backup>
+        (ClassLinker *thiz, Thread *self, ArtMethod *method) static -> void {
+            return backup(thiz, self, MayGetBackup(method));
+        };
+
+    static void RestoreBackup(const dex::ClassDef *class_def, art::Thread *self) {
+        auto methods = mirror::Class::PopBackup(class_def, self);
+        for (const auto &[art_method, old_trampoline] : methods) {
+            auto new_trampoline = art_method->GetEntryPoint();
+            art_method->SetEntryPoint(old_trampoline);
+            auto deoptimized = IsDeoptimized(art_method);
+            auto backup_method = IsHooked(art_method);
+            if (backup_method) {
+                // If deoptimized, the backup entrypoint should be already set to interpreter
+                if (!deoptimized && new_trampoline != old_trampoline) [[unlikely]] {
+                    LOGV("propagate entrypoint for orig %p backup %p", art_method, backup_method);
+                    backup_method->SetEntryPoint(new_trampoline);
+                }
+            } else if (deoptimized) {
+                if (new_trampoline != &art_quick_to_interpreter_bridge_ && !art_method->IsNative()) {
+                    LOGV("re-deoptimize for %p", art_method);
+                    SetEntryPointsToInterpreter(art_method);
+                }
+            }
+        }
+    }
+
+    inline static auto FixupStaticTrampolines_ =
+        "_ZN3art11ClassLinker22FixupStaticTrampolinesENS_6ObjPtrINS_6mirror5ClassEEE"_sym.hook->*[]
+        <MemBackup auto backup>
+        (ClassLinker *thiz, ObjPtr<mirror::Class> mirror_class) static -> void {
+            backup(thiz, mirror_class);
+            RestoreBackup(mirror_class->GetClassDef(), nullptr);
+        };
+
+#ifdef __i386__
+    // regparm(3) assigns EAX, EDX, ECX. The unused first argument leaves
+    // self in EDX and this in ECX, matching ART's internal fastcc ABI.
+    inline static auto FixupStaticTrampolinesWithThread_ =
+        "_ZN3art11ClassLinker22FixupStaticTrampolinesEPNS_6ThreadENS_6ObjPtrINS_6mirror5ClassEEE"_sym.raw_hook->*[]
+        <Backup auto backup> [[gnu::regparm(3), gnu::force_align_arg_pointer, gnu::noinline]]
+        (void *, Thread *register_self, ClassLinker *register_this,
+         void *stack_this_or_class, Thread *stack_self,
+         ObjPtr<mirror::Class> stack_class) static -> void {
+            HookHandler::WaitForInitialization();
+
+            // Forward both layouts; ART consumes only the slots belonging to its ABI.
+            backup(nullptr, register_self, register_this, stack_this_or_class, stack_self,
+                   stack_class);
+            RestoreBackup(nullptr, Thread::Current());
+        };
+#else
+    inline static auto FixupStaticTrampolinesWithThread_ =
+        "_ZN3art11ClassLinker22FixupStaticTrampolinesEPNS_6ThreadENS_6ObjPtrINS_6mirror5ClassEEE"_sym.hook->*[]
+        <MemBackup auto backup>
+        (ClassLinker *thiz, Thread *self, ObjPtr<mirror::Class> mirror_class) static -> void {
+            backup(thiz, self, mirror_class);
+            RestoreBackup(mirror_class->GetClassDef(), self);
+        };
+#endif
+
+    inline static auto FixupStaticTrampolinesRaw_ =
+        "_ZN3art11ClassLinker22FixupStaticTrampolinesEPNS_6mirror5ClassE"_sym.hook->*[]
+        <MemBackup auto backup>
+        (ClassLinker *thiz, mirror::Class *mirror_class)static -> void {
+            backup(thiz, mirror_class);
+            RestoreBackup(mirror_class->GetClassDef(), nullptr);
+        };
+
+    inline static auto AdjustThreadVisibilityCounter_ =
+        ("_ZN3art11ClassLinker26VisiblyInitializedCallback29AdjustThreadVisibilityCounterEPNS_6ThreadEi"_sym |
+         "_ZN3art11ClassLinker26VisiblyInitializedCallback29AdjustThreadVisibilityCounterEPNS_6ThreadEl"_sym).hook->*[]
+         <MemBackup auto backup>
+         (ClassLinker *thiz, Thread *self, ssize_t adjustment) static -> void {
+            backup(thiz, self, adjustment);
+            RestoreBackup(nullptr, self);
+        };
+
+    inline static auto MarkVisiblyInitialized_ =
+        "_ZN3art11ClassLinker26VisiblyInitializedCallback22MarkVisiblyInitializedEPNS_6ThreadE"_sym.hook->*[]
+        <MemBackup auto backup>
+        (ClassLinker *thiz, Thread *self) static -> void {
+            backup(thiz, self);
+            RestoreBackup(nullptr, self);
+        };
+
+    static void *GetOptimizedCodeFor(ArtMethod *method) {
+        if constexpr (is_arch_v<Arch::kX86>) {
+            extern void *(*get_optimized_code_for)(ArtMethod *)asm(
+                "lsplant_bridge_get_optimized_code_for");
+            get_optimized_code_for =
+                GetOptimizedCodeFor_ ? &GetOptimizedCodeFor_ : &GetOptimizedCodeForL_;
+            return [] [[gnu::naked]] (ArtMethod * method) static -> void * {
+                asm volatile(R"(
+                    pushl   %ebx
+                    pushl   %ecx
+                    pushl   %edx
+                    pushl   %esi
+                    pushl   %edi
+                    pushl   %ebp
+
+                    calll   1f
+                1:
+                    popl    %eax
+                    addl    $_GLOBAL_OFFSET_TABLE_+[.-1b], %eax
+                    movl    lsplant_bridge_get_optimized_code_for@GOT(%eax), %eax
+                    movl    (%eax), %eax
+
+                    movl    28(%esp), %ecx
+                    pushl   %ecx
+                    calll   *%eax
+                    addl    $4, %esp
+
+                    popl    %ebp
+                    popl    %edi
+                    popl    %esi
+                    popl    %edx
+                    popl    %ecx
+                    popl    %ebx
+                    retl
+
+                    .bss
+                    .global lsplant_bridge_get_optimized_code_for
+                    .hidden lsplant_bridge_get_optimized_code_for
+                    .common lsplant_bridge_get_optimized_code_for, 4, 4
+                    .previous
+                )");
+            }(method);
+        } else if (GetOptimizedCodeFor_) [[likely]] {
+            return GetOptimizedCodeFor_(method);
+        } else {
+            return GetOptimizedCodeForL_(method);
+        }
+    }
+
+public:
+    static bool Init(JNIEnv *env, const HookHandler &handler) {
+        if (!handler(SetEntryPointsToInterpreter_)) [[likely]] {
+            if (handler(GetOptimizedCodeFor_, GetOptimizedCodeForL_, true)) [[likely]] {
+                auto obj = JNI_FindClass(env, "java/lang/Object");
+                if (!obj) {
+                    return false;
+                }
+                auto method = JNI_GetMethodID(env, obj, "equals", "(Ljava/lang/Object;)Z");
+                if (!method) {
+                    return false;
+                }
+                auto dummy = ArtMethod::FromReflectedMethod(
+                        env, JNI_ToReflectedMethod(env, obj, method, false).get())->Clone();
+                JavaDebuggableGuard guard;
+                // just in case
+                dummy->SetNonNative();
+                art_quick_to_interpreter_bridge_ = GetOptimizedCodeFor(dummy.get());
+            } else if (!handler(art_quick_to_interpreter_bridge_)) [[unlikely]] {
+                return false;
+            }
+            LOGD("art_quick_to_interpreter_bridge = %p", &art_quick_to_interpreter_bridge_);
+        }
+        return true;
+    }
+
+    static bool InitHooks(const HookHandler &handler) {
+        int sdk_int = GetAndroidApiLevel();
+
+        if (sdk_int >= kSdkNougat && sdk_int < kSdkTiramisu) {
+            handler(ShouldUseInterpreterEntrypoint_);
+        }
+
+        // ART may inline these methods, so their absence is not an initialization failure.
+        handler(FixupStaticTrampolinesWithThread_, FixupStaticTrampolines_,
+                FixupStaticTrampolinesRaw_);
+
+        auto register_native_hooked = sdk_int >= kSdkOreo && sdk_int < kSdkPie
+                                          ? handler(RegisterNativeFastWithReturn_)
+                                          : handler(RegisterNativeClassLinker_, RegisterNative_,
+                                                    RegisterNativeFast_, RegisterNativeThread_);
+        if (!register_native_hooked ||
+            !handler(UnregisterNativeClassLinker_, UnregisterNative_,
+                     UnregisterNativeThread_)) {
+            return false;
+        }
+
+        if (sdk_int >= kSdkR) {
+            if constexpr (!is_arch_v<Arch::kX86, Arch::kAmd64>) {
+                // fixup static trampoline may have been inlined
+                handler(AdjustThreadVisibilityCounter_, MarkVisiblyInitialized_);
+            }
+        }
+
+        return true;
+    }
+
+    [[gnu::always_inline]] static bool SetEntryPointsToInterpreter(ArtMethod *art_method) {
+        if (art_method->IsNative()) {
+            return false;
+        }
+        if (SetEntryPointsToInterpreter_) [[likely]] {
+            SetEntryPointsToInterpreter_(nullptr, art_method);
+            return true;
+        }
+        // Android 13
+        if (art_quick_to_interpreter_bridge_) [[likely]] {
+            LOGV("deoptimize method %s from %p to %p", art_method->PrettyMethod(true).data(),
+                 art_method->GetEntryPoint(), &art_quick_to_interpreter_bridge_);
+            art_method->SetEntryPoint(
+                reinterpret_cast<void *>(&art_quick_to_interpreter_bridge_));
+            return true;
+        }
+        return false;
+    }
+};
+}  // namespace lsplant::art
