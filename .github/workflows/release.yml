@@ -20,8 +20,10 @@ jobs:
       # ubuntu runner 预装 Android SDK（同 ci.yml，不用 setup-android action）
       - name: 安装 SDK 组件（cmake / android-37 / NDK r30）
         run: |
-          yes | sdkmanager --licenses > /dev/null || true
-          yes | sdkmanager "cmake;3.31.6" "platforms;android-37" > /dev/null
+          set -x
+          SDKM=$(ls $ANDROID_HOME/cmdline-tools/*/bin/sdkmanager | head -1)
+          yes | "$SDKM" --licenses > /dev/null || true
+          yes | "$SDKM" "cmake;3.31.6" "platforms;android-37" > /dev/null
           # NDK r30 不在 stable 仓库（lsplant C++23 modules 需要，NDK 27 clang 不支持）
           # ——直接官方直链下载解压，目录名对齐 AGP ndkVersion 钉的 revision
           curl -sfLo /tmp/ndk.zip https://dl.google.com/android/repository/android-ndk-r30-linux.zip
