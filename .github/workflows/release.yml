@@ -17,10 +17,11 @@ jobs:
           distribution: temurin
           java-version: 17
 
-      - uses: android-actions/setup-android@v3
-
+      # ubuntu runner 预装 Android SDK（同 ci.yml，不用 setup-android action）
       - name: 安装 SDK 组件（NDK 30 / cmake / android-37）
-        run: sdkmanager "ndk;30.0.16248370" "cmake;3.31.6" "platforms;android-37" > /dev/null
+        run: |
+          yes | sdkmanager --licenses > /dev/null || true
+          sdkmanager "ndk;30.0.16248370" "cmake;3.31.6" "platforms;android-37" > /dev/null
 
       - name: 构建工具链 dist
         run: ./gradlew :toolchain:installDist --no-daemon
