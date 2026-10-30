@@ -21,7 +21,7 @@ jobs:
       - name: 安装 SDK 组件（NDK 30 / cmake / android-37）
         run: |
           yes | sdkmanager --licenses > /dev/null || true
-          sdkmanager "ndk;30.0.16248370" "cmake;3.31.6" "platforms;android-37" > /dev/null
+          yes | sdkmanager "ndk;30.0.16248370" "cmake;3.31.6" "platforms;android-37" > /dev/null
 
       - name: 构建工具链 dist
         run: ./gradlew :toolchain:installDist --no-daemon
